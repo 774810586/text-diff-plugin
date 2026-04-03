@@ -1,12 +1,1237 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>文本对比 Diff 插件</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="./src/main.tsx"></script>
-  </body>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent 知识库评测打标盲评平台 v2</title>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5.2.0/github-markdown-light.css">
+    <style>
+        :root {
+            --primary: #4f6ef7;
+            --primary-light: #eef1fe;
+            --good: #16a34a;
+            --good-bg: #f0fdf4;
+            --same: #ca8a04;
+            --same-bg: #fefce8;
+            --bad: #dc2626;
+            --bad-bg: #fef2f2;
+            --uncertain-bg: #fff7ed;
+            --uncertain: #ea580c;
+            --invalid-bg: #faf5ff;
+            --invalid: #9333ea;
+            --border: #e2e8f0;
+            --bg: #f8fafc;
+            --text: #1e293b;
+            --text-secondary: #64748b;
+            --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
+            --shadow-md: 0 4px 12px rgba(0,0,0,.08);
+            --sync: #0891b2;
+            --sync-bg: #ecfeff;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+
+        .header { background: linear-gradient(135deg, #4f6ef7 0%, #6366f1 100%); color: #fff; padding: 28px 0 24px; text-align: center; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 12px rgba(79,110,247,.3); }
+        .header h1 { font-size: 22px; font-weight: 700; letter-spacing: .5px; }
+        .header .subtitle { font-size: 13px; opacity: .85; margin-top: 4px; }
+
+        .stats-bar { display: flex; justify-content: center; gap: 28px; padding: 14px 24px; background: #fff; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text-secondary); flex-wrap: wrap; }
+        .stats-bar .stat-item span { font-weight: 700; color: var(--text); margin-left: 4px; }
+        .sync-indicator { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+        .sync-indicator.connected { background: var(--sync-bg); color: var(--sync); }
+        .sync-indicator.disconnected { background: var(--bg); color: var(--text-secondary); }
+        .sync-dot { width: 7px; height: 7px; border-radius: 50%; }
+        .sync-dot.on { background: var(--sync); animation: pulse 2s infinite; }
+        .sync-dot.off { background: #cbd5e1; }
+        @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.4; } }
+
+        .container { max-width: 1360px; margin: 0 auto; padding: 24px 20px 80px; }
+
+        /* ===== Source Selection Tabs ===== */
+        .source-section { max-width: 680px; margin: 40px auto 0; }
+        .source-tabs { display: flex; gap: 0; background: var(--bg); border-radius: 12px 12px 0 0; border: 1px solid var(--border); border-bottom: none; overflow: hidden; }
+        .source-tab { flex: 1; padding: 14px 20px; text-align: center; font-size: 14px; font-weight: 600; cursor: pointer; background: #fff; color: var(--text-secondary); border-right: 1px solid var(--border); transition: all .15s; display: flex; align-items: center; justify-content: center; gap: 8px; }
+        .source-tab:last-child { border-right: none; }
+        .source-tab.active { color: var(--primary); background: var(--primary-light); }
+        .source-tab:hover:not(.active) { background: var(--bg); }
+        .source-tab svg { width: 18px; height: 18px; }
+        .source-panel { border: 1px solid var(--border); border-radius: 0 0 12px 12px; background: #fff; padding: 32px 28px; display: none; }
+        .source-panel.active { display: block; }
+
+        /* File upload */
+        .upload-box { border: 2px dashed var(--border); border-radius: 12px; padding: 40px 32px; text-align: center; transition: all .2s; cursor: pointer; }
+        .upload-box:hover, .upload-box.dragover { border-color: var(--primary); background: var(--primary-light); }
+        .upload-box svg { width: 44px; height: 44px; color: var(--primary); margin-bottom: 10px; }
+        .upload-box h3 { font-size: 15px; margin-bottom: 4px; }
+        .upload-box p { font-size: 13px; color: var(--text-secondary); }
+        .upload-box .note { margin-top: 12px; padding: 10px 16px; background: #fffbeb; border-radius: 8px; font-size: 12px; color: #92400e; text-align: left; }
+
+        /* Bitable form */
+        .bitable-form { display: flex; flex-direction: column; gap: 16px; }
+        .form-group { display: flex; flex-direction: column; gap: 5px; }
+        .form-group label { font-size: 13px; font-weight: 600; color: var(--text); }
+        .form-group .hint { font-size: 11px; color: var(--text-secondary); }
+        .form-input { width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; font-family: inherit; transition: border .15s; }
+        .form-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79,110,247,.1); }
+        .form-input::placeholder { color: #94a3b8; }
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+        /* Field Mapping */
+        .field-mapping { border: 1px solid var(--border); border-radius: 10px; padding: 16px; background: var(--bg); }
+        .field-mapping h4 { font-size: 13px; font-weight: 700; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+        .field-mapping h4 svg { width: 16px; height: 16px; color: var(--primary); }
+        .mapping-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .mapping-item { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+        .mapping-item .label { min-width: 90px; font-weight: 600; color: var(--text-secondary); }
+        .mapping-item select { flex: 1; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; background: #fff; cursor: pointer; }
+        .mapping-item select:focus { outline: none; border-color: var(--primary); }
+
+        .writeback-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+        .writeback-toggle { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 10px; cursor: pointer; }
+        .writeback-toggle input { accent-color: var(--primary); }
+
+        .btn-connect { width: 100%; padding: 11px; border-radius: 8px; background: var(--primary); color: #fff; border: none; font-size: 14px; font-weight: 600; cursor: pointer; transition: all .15s; }
+        .btn-connect:hover { background: #4060e0; }
+        .btn-connect:disabled { background: #94a3b8; cursor: not-allowed; }
+        .btn-connect.loading { position: relative; color: transparent; }
+        .btn-connect.loading::after { content: ''; position: absolute; width: 18px; height: 18px; border: 2px solid #fff; border-top: 2px solid transparent; border-radius: 50%; animation: spin .6s linear infinite; left: 50%; top: 50%; margin: -9px 0 0 -9px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .connection-status { padding: 10px 14px; border-radius: 8px; font-size: 12px; display: none; margin-top: 8px; }
+        .connection-status.success { display: block; background: var(--good-bg); color: var(--good); }
+        .connection-status.error { display: block; background: var(--bad-bg); color: var(--bad); }
+
+        /* ===== Main Content (same as before with additions) ===== */
+        .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
+        .toolbar-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .toolbar-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+        .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; border: none; cursor: pointer; transition: all .15s; }
+        .btn-outline { background: #fff; color: var(--text); border: 1px solid var(--border); }
+        .btn-outline:hover { background: var(--bg); }
+        .btn-export { background: #059669; color: #fff; }
+        .btn-export:hover { background: #047857; }
+        .btn-sync { background: var(--sync); color: #fff; }
+        .btn-sync:hover { background: #0e7490; }
+        .btn-sync:disabled { background: #94a3b8; cursor: not-allowed; }
+        .btn-reset { background: #fff; color: var(--bad); border: 1px solid #fecaca; }
+        .btn-reset:hover { background: var(--bad-bg); }
+
+        .auto-sync-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); font-weight: 500; cursor: pointer; padding: 6px 12px; border-radius: 8px; background: #fff; border: 1px solid var(--border); }
+        .auto-sync-toggle input { accent-color: var(--sync); }
+
+        .nav-group { display: flex; align-items: center; gap: 6px; }
+        .nav-btn { width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--border); background: #fff; cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center; transition: all .15s; }
+        .nav-btn:hover:not(:disabled) { background: var(--primary-light); border-color: var(--primary); color: var(--primary); }
+        .nav-btn:disabled { opacity: .4; cursor: not-allowed; }
+        .nav-info { font-size: 13px; color: var(--text-secondary); min-width: 80px; text-align: center; }
+
+        .filter-group { display: flex; gap: 4px; background: var(--bg); padding: 3px; border-radius: 8px; }
+        .filter-btn { padding: 5px 12px; border-radius: 6px; border: none; font-size: 12px; font-weight: 500; cursor: pointer; background: transparent; color: var(--text-secondary); transition: all .15s; white-space: nowrap; }
+        .filter-btn.active { background: #fff; color: var(--text); box-shadow: var(--shadow); }
+
+        .case-card { background: #fff; border-radius: 14px; box-shadow: var(--shadow); margin-bottom: 20px; overflow: hidden; border: 1px solid var(--border); }
+        .case-header { display: flex; justify-content: space-between; align-items: flex-start; padding: 16px 20px; border-bottom: 1px solid var(--border); background: var(--bg); }
+        .case-meta { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+        .case-id { font-size: 12px; color: var(--text-secondary); word-break: break-all; }
+        .case-query { font-size: 14px; font-weight: 600; color: var(--text); max-width: 900px; word-break: break-word; }
+
+        .badge-group { display: flex; gap: 6px; align-items: center; flex-shrink: 0; margin-left: 12px; }
+        .badge { padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+        .badge-pending { background: var(--bg); color: var(--text-secondary); border: 1px solid var(--border); }
+        .badge-done { background: var(--good-bg); color: var(--good); }
+        .badge-uncertain { background: var(--uncertain-bg); color: var(--uncertain); }
+        .badge-invalid { background: var(--invalid-bg); color: var(--invalid); }
+        .badge-synced { background: var(--sync-bg); color: var(--sync); font-size: 10px; }
+        .badge-sync-pending { background: #fffbeb; color: #ca8a04; font-size: 10px; }
+
+        .results-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+        .result-panel { padding: 20px; border-right: 1px solid var(--border); min-height: 200px; }
+        .result-panel:last-child { border-right: none; }
+        .result-label { display: inline-block; padding: 3px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; margin-bottom: 12px; letter-spacing: .5px; }
+        .label-a { background: #dbeafe; color: #1d4ed8; }
+        .label-b { background: #fce7f3; color: #be185d; }
+
+        .md-content { font-size: 14px; line-height: 1.75; max-height: 480px; overflow-y: auto; padding-right: 8px; }
+        .md-content::-webkit-scrollbar { width: 5px; }
+        .md-content::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        .md-content h1, .md-content h2, .md-content h3, .md-content h4 { margin-top: 16px; margin-bottom: 8px; font-weight: 600; border: none; padding-bottom: 0; }
+        .md-content h1 { font-size: 20px; } .md-content h2 { font-size: 17px; } .md-content h3 { font-size: 15px; }
+        .md-content p { margin-bottom: 10px; }
+        .md-content ul, .md-content ol { padding-left: 20px; margin-bottom: 10px; }
+        .md-content li { margin-bottom: 4px; }
+        .md-content code { background: #f1f5f9; padding: 1px 5px; border-radius: 4px; font-size: 13px; color: #e11d48; }
+        .md-content pre { background: #1e293b; color: #e2e8f0; padding: 14px 16px; border-radius: 8px; overflow-x: auto; margin-bottom: 12px; }
+        .md-content pre code { background: transparent; color: inherit; padding: 0; }
+        .md-content blockquote { border-left: 3px solid var(--primary); padding: 8px 16px; margin: 10px 0; background: var(--primary-light); border-radius: 0 8px 8px 0; }
+        .md-content table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 13px; }
+        .md-content th, .md-content td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+        .md-content th { background: var(--bg); font-weight: 600; }
+        .md-content img { max-width: 100%; border-radius: 8px; }
+        .md-content a { color: var(--primary); text-decoration: none; }
+        .md-content a:hover { text-decoration: underline; }
+        .md-content hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+
+        .annotation-bar { display: flex; justify-content: center; align-items: center; gap: 10px; padding: 16px 20px; border-top: 1px solid var(--border); background: var(--bg); flex-wrap: wrap; }
+        .gsb-group { display: flex; gap: 8px; }
+        .gsb-btn { padding: 8px 22px; border-radius: 8px; border: 2px solid var(--border); background: #fff; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .2s; }
+        .gsb-btn:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
+        .gsb-btn.good { border-color: transparent; }
+        .gsb-btn.good:hover, .gsb-btn.good.selected { background: var(--good-bg); border-color: var(--good); color: var(--good); }
+        .gsb-btn.same { border-color: transparent; }
+        .gsb-btn.same:hover, .gsb-btn.same.selected { background: var(--same-bg); border-color: var(--same); color: var(--same); }
+        .gsb-btn.bad { border-color: transparent; }
+        .gsb-btn.bad:hover, .gsb-btn.bad.selected { background: var(--bad-bg); border-color: var(--bad); color: var(--bad); }
+        .gsb-btn .key-hint { font-size: 10px; color: var(--text-secondary); margin-left: 4px; opacity: .6; }
+
+        .divider { width: 1px; height: 28px; background: var(--border); }
+
+        .extra-btn { padding: 8px 16px; border-radius: 8px; border: 2px solid transparent; background: #fff; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--text-secondary); transition: all .2s; }
+        .uncertain-btn:hover, .uncertain-btn.selected { background: var(--uncertain-bg); border-color: var(--uncertain); color: var(--uncertain); }
+        .invalid-btn:hover, .invalid-btn.selected { background: var(--invalid-bg); border-color: var(--invalid); color: var(--invalid); }
+
+        .reason-box { padding: 12px 20px 16px; border-top: 1px solid var(--border); display: none; }
+        .reason-box.show { display: block; }
+        .reason-box.uncertain-reason { background: var(--uncertain-bg); }
+        .reason-box.invalid-reason { background: #faf5ff; }
+        .reason-box textarea { width: 100%; min-height: 60px; border: 1px solid #ccc; border-radius: 8px; padding: 10px 12px; font-size: 13px; resize: vertical; font-family: inherit; background: #fff; }
+        .reason-box textarea:focus { outline: none; box-shadow: 0 0 0 3px rgba(0,0,0,.05); }
+        .reason-box.uncertain-reason textarea { border-color: #fdba74; }
+        .reason-box.uncertain-reason textarea:focus { border-color: var(--uncertain); box-shadow: 0 0 0 3px rgba(234,88,12,.1); }
+        .reason-box.invalid-reason textarea { border-color: #d8b4fe; }
+        .reason-box.invalid-reason textarea:focus { border-color: var(--invalid); box-shadow: 0 0 0 3px rgba(147,51,234,.1); }
+        .reason-box label { font-size: 12px; font-weight: 600; margin-bottom: 6px; display: block; }
+        .reason-box.uncertain-reason label { color: var(--uncertain); }
+        .reason-box.invalid-reason label { color: var(--invalid); }
+
+        .progress-bar { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, var(--primary), #6366f1); border-radius: 2px; transition: width .3s; }
+
+        .empty-state { text-align: center; padding: 60px 20px; color: var(--text-secondary); }
+        .empty-state svg { width: 64px; height: 64px; opacity: .3; margin-bottom: 12px; }
+
+        .toast { position: fixed; bottom: 24px; right: 24px; padding: 12px 20px; background: #1e293b; color: #fff; border-radius: 10px; font-size: 13px; font-weight: 500; z-index: 1000; opacity: 0; transform: translateY(12px); transition: all .3s; pointer-events: none; max-width: 400px; }
+        .toast.show { opacity: 1; transform: translateY(0); }
+        .toast.error { background: var(--bad); }
+        .toast.success { background: var(--good); }
+
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 200; display: none; align-items: center; justify-content: center; }
+        .modal-overlay.show { display: flex; }
+        .modal { background: #fff; border-radius: 16px; padding: 28px; max-width: 480px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,.15); }
+        .modal h3 { font-size: 17px; margin-bottom: 16px; }
+        .modal .btn-group { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+
+        .jump-input { width: 52px; text-align: center; border: 1px solid var(--border); border-radius: 6px; padding: 4px; font-size: 13px; font-weight: 600; }
+        .jump-input:focus { outline: none; border-color: var(--primary); }
+
+        /* API Domain selector */
+        .api-domain-row { display: flex; gap: 8px; align-items: center; }
+        .api-domain-row select { padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; background: #fff; }
+
+        @media (max-width: 768px) {
+            .results-grid { grid-template-columns: 1fr; }
+            .result-panel { border-right: none; border-bottom: 1px solid var(--border); }
+            .toolbar { flex-direction: column; align-items: stretch; }
+            .mapping-grid { grid-template-columns: 1fr; }
+            .form-row { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h1>Agent 知识库评测打标盲评平台</h1>
+    <div class="subtitle">支持 Excel 文件上传 & 飞书多维表在线获取 → 盲评对比 → 实时同步结果</div>
+</div>
+
+<div id="statsBar" class="stats-bar" style="display:none">
+    <div class="stat-item">总用例: <span id="totalCount">0</span></div>
+    <div class="stat-item">已标注: <span id="doneCount">0</span></div>
+    <div class="stat-item">不易判断: <span id="uncertainCount">0</span></div>
+    <div class="stat-item">不合适: <span id="invalidCount">0</span></div>
+    <div class="stat-item">
+        <div class="progress-bar" style="width:120px; display:inline-block; vertical-align:middle;">
+            <div class="progress-fill" id="progressFill" style="width:0%"></div>
+        </div>
+        <span id="progressPct">0%</span>
+    </div>
+    <div class="stat-item" id="syncStatusItem" style="display:none">
+        <div class="sync-indicator" id="syncIndicator">
+            <div class="sync-dot" id="syncDot"></div>
+            <span id="syncStatusText">未连接</span>
+        </div>
+    </div>
+</div>
+
+<div class="container">
+    <!-- ===== Source Selection ===== -->
+    <div id="sourceSection" class="source-section">
+        <div class="source-tabs">
+            <div class="source-tab active" data-tab="file" onclick="switchSourceTab('file')">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" /></svg>
+                上传 Excel 文件
+            </div>
+            <div class="source-tab" data-tab="bitable" onclick="switchSourceTab('bitable')">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" /></svg>
+                从多维表获取
+            </div>
+        </div>
+
+        <!-- Tab 1: File Upload -->
+        <div class="source-panel active" id="panel-file">
+            <div class="upload-box" id="uploadBox">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" /></svg>
+                <h3>点击或拖拽上传 Excel 文件</h3>
+                <p>支持 .xlsx / .xls 格式</p>
+                <div class="note">⚠️ 仅解析第一个 Sheet 的前 <strong>1000 行</strong>数据<br>必需列：QueryID、Query、LogID、BaseResult、PrismResult</div>
+            </div>
+            <input type="file" id="fileInput" accept=".xlsx,.xls" hidden>
+        </div>
+
+        <!-- Tab 2: Bitable -->
+        <div class="source-panel" id="panel-bitable">
+            <div class="bitable-form">
+                <div class="form-group">
+                    <label>多维表格 URL</label>
+                    <input type="text" class="form-input" id="bitableUrl" placeholder="https://bytedance.larkoffice.com/base/xxx?table=tblXXX&view=vewXXX">
+                    <div class="hint">粘贴多维表格的完整链接，需包含 table 参数</div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Personal Access Token</label>
+                        <input type="password" class="form-input" id="bitableToken" placeholder="输入你的 PAT">
+                        <div class="hint"><a href="https://open.feishu.cn/document/server-docs/api-call-guide/calling-process/get-access-token" target="_blank" style="color:var(--primary)">如何获取 Token →</a></div>
+                    </div>
+                    <div class="form-group">
+                        <label>API 域名</label>
+                        <select class="form-input" id="apiDomain">
+                            <option value="https://open.feishu.cn">open.feishu.cn (国内)</option>
+                            <option value="https://open.larksuite.com">open.larksuite.com (海外)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <button class="btn-connect" id="btnConnect" onclick="connectBitable()">连接并获取字段</button>
+                <div class="connection-status" id="connectionStatus"></div>
+
+                <!-- Field Mapping (shown after connection) -->
+                <div id="fieldMappingSection" style="display:none">
+                    <div class="field-mapping">
+                        <h4>
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" /></svg>
+                            读取字段映射
+                        </h4>
+                        <div class="mapping-grid" id="readMappingGrid"></div>
+
+                        <div class="writeback-section">
+                            <h4 style="margin-top:0">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" style="width:16px;height:16px;color:var(--sync)"><path stroke-linecap="round" stroke-linejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.338-2.32 3 3 0 013.438 3.583A4.5 4.5 0 0118 19.5H6.75z" /></svg>
+                                回写字段映射 <span style="font-weight:400;color:var(--text-secondary);font-size:11px">（如字段不存在需先在多维表中创建）</span>
+                            </h4>
+                            <div class="mapping-grid" id="writeMappingGrid"></div>
+                        </div>
+                    </div>
+                    <button class="btn-connect" id="btnLoadData" onclick="loadBitableData()" style="margin-top:14px; background:#059669;">
+                        加载数据并开始标注
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== Main Annotation Content ===== -->
+    <div id="mainContent" style="display:none">
+        <div class="toolbar">
+            <div class="toolbar-left">
+                <div class="filter-group">
+                    <button class="filter-btn active" data-filter="all">全部</button>
+                    <button class="filter-btn" data-filter="pending">待标注</button>
+                    <button class="filter-btn" data-filter="done">已标注</button>
+                    <button class="filter-btn" data-filter="uncertain">不易判断</button>
+                    <button class="filter-btn" data-filter="invalid">不合适</button>
+                </div>
+                <label class="auto-sync-toggle" id="autoSyncLabel" style="display:none">
+                    <input type="checkbox" id="autoSyncCheckbox" checked> 自动回写多维表
+                </label>
+            </div>
+            <div class="toolbar-right">
+                <div class="nav-group">
+                    <button class="nav-btn" id="prevBtn" title="上一条 (←)">‹</button>
+                    <div class="nav-info">
+                        <input type="text" class="jump-input" id="jumpInput" title="输入序号回车跳转"> / <span id="filteredTotal">0</span>
+                    </div>
+                    <button class="nav-btn" id="nextBtn" title="下一条 (→)">›</button>
+                </div>
+                <button class="btn btn-sync" id="btnSyncAll" style="display:none" onclick="syncAllToBitable()">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" /></svg>
+                    同步到多维表
+                </button>
+                <button class="btn btn-export" onclick="exportResults()">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg>
+                    导出 Excel
+                </button>
+                <button class="btn btn-reset" onclick="confirmReset()">重置</button>
+            </div>
+        </div>
+        <div id="caseContainer"></div>
+        <div id="emptyState" class="empty-state" style="display:none">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5m6 4.125l2.25 2.25m0 0l2.25-2.25M12 13.875V7.5M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" /></svg>
+            <p>当前筛选条件下没有数据</p>
+        </div>
+    </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div class="modal-overlay" id="resetModal">
+    <div class="modal">
+        <h3>确认重置</h3>
+        <p style="color:var(--text-secondary); font-size:14px;">将清除所有已上传数据和标注记录，此操作不可撤销。</p>
+        <div class="btn-group">
+            <button class="btn btn-outline" onclick="closeModal()">取消</button>
+            <button class="btn" style="background:var(--bad);color:#fff;" onclick="doReset()">确认重置</button>
+        </div>
+    </div>
+</div>
+
+<script>
+// ======================== STATE ========================
+let allCases = [];
+let currentFilter = 'all';
+let currentIndex = 0;
+let dataSource = 'file'; // 'file' | 'bitable'
+
+// Bitable state
+const btState = {
+    connected: false,
+    appToken: '',
+    tableId: '',
+    token: '',
+    apiBase: '',
+    fields: [],         // [{field_id, field_name, type}]
+    readMapping: {},     // { queryId: fieldName, query: fieldName, ... }
+    writeMapping: {},    // { annotation: fieldName, status: fieldName, ... }
+    syncQueue: new Set(),
+    syncing: false
+};
+
+const READ_FIELDS = [
+    { key: 'queryId',     label: 'QueryID',     required: true },
+    { key: 'query',       label: 'Query',        required: true },
+    { key: 'logId',       label: 'LogID',        required: false },
+    { key: 'baseResult',  label: 'BaseResult',   required: true },
+    { key: 'prismResult', label: 'PrismResult',  required: true }
+];
+
+const WRITE_FIELDS = [
+    { key: 'conclusion',       label: 'BaseVsPrism结论',  defaultName: 'BaseVsPrism结论' },
+    { key: 'status',           label: '标注状态',          defaultName: '标注状态' },
+    { key: 'blindChoice',      label: '盲评选择(AB维度)',  defaultName: '盲评选择' },
+    { key: 'uncertainFlag',    label: '不易判断',          defaultName: '不易判断' },
+    { key: 'uncertainReason',  label: '不易判断原因',      defaultName: '不易判断原因' },
+    { key: 'invalidFlag',     label: '不合适',            defaultName: '不合适' },
+    { key: 'invalidReason',   label: '不合适原因',        defaultName: '不合适原因' }
+];
+
+const COLUMN_ALIASES = {
+    queryId:     ['QueryID', 'AE QueryID', 'AEQueryID', 'queryid', 'ae queryid'],
+    query:       ['Query', 'query', 'QUERY'],
+    logId:       ['LogID', 'logid', 'LogId', 'LOGID'],
+    baseResult:  ['BaseResult', 'baseresult', 'Base Result'],
+    prismResult: ['PrismResult', 'prismresult', 'Prism Result']
+};
+
+function findColumn(headers, aliases) {
+    for (const a of aliases) { const f = headers.find(h => h && h.trim() === a); if (f) return f; }
+    for (const a of aliases) { const f = headers.find(h => h && h.trim().toLowerCase() === a.toLowerCase()); if (f) return f; }
+    return null;
+}
+
+// ======================== SOURCE TAB ========================
+function switchSourceTab(tab) {
+    document.querySelectorAll('.source-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+    document.querySelectorAll('.source-panel').forEach(p => p.classList.remove('active'));
+    document.getElementById('panel-' + tab).classList.add('active');
+}
+
+// ======================== FILE UPLOAD ========================
+const uploadBox = document.getElementById('uploadBox');
+const fileInput = document.getElementById('fileInput');
+uploadBox.addEventListener('click', () => fileInput.click());
+uploadBox.addEventListener('dragover', e => { e.preventDefault(); uploadBox.classList.add('dragover'); });
+uploadBox.addEventListener('dragleave', () => uploadBox.classList.remove('dragover'));
+uploadBox.addEventListener('drop', e => { e.preventDefault(); uploadBox.classList.remove('dragover'); if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]); });
+fileInput.addEventListener('change', e => { if (e.target.files.length) handleFile(e.target.files[0]); });
+
+function handleFile(file) {
+    if (!/\.xlsx?$/i.test(file.name)) return showToast('请上传 .xlsx 或 .xls 文件', 'error');
+    const reader = new FileReader();
+    reader.onload = e => parseExcel(e.target.result);
+    reader.readAsArrayBuffer(file);
+}
+
+function parseExcel(buffer) {
+    try {
+        const wb = XLSX.read(buffer, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        if (!json.length) return showToast('Excel 文件为空', 'error');
+
+        const headers = Object.keys(json[0]);
+        const colMap = {};
+        const missing = [];
+        for (const [key, aliases] of Object.entries(COLUMN_ALIASES)) {
+            const found = findColumn(headers, aliases);
+            if (found) colMap[key] = found; else missing.push(aliases[0]);
+        }
+        if (missing.length) return showToast('缺少必需列: ' + missing.join(', '), 'error');
+
+        const maxRows = Math.min(json.length, 1000);
+        if (json.length > 1000) showToast(`数据已截取前 1000 行（原始 ${json.length} 行）`);
+
+        allCases = [];
+        for (let i = 0; i < maxRows; i++) {
+            const row = json[i];
+            allCases.push(createCase(i, {
+                queryId: String(row[colMap.queryId] || ''),
+                query: String(row[colMap.query] || ''),
+                logId: String(row[colMap.logId] || ''),
+                baseResult: String(row[colMap.baseResult] || ''),
+                prismResult: String(row[colMap.prismResult] || '')
+            }));
+        }
+
+        dataSource = 'file';
+        enterAnnotationMode();
+        showToast(`成功加载 ${allCases.length} 条用例`, 'success');
+    } catch (err) {
+        showToast('解析失败: ' + err.message, 'error');
+    }
+}
+
+function createCase(idx, data) {
+    return {
+        idx,
+        queryId: data.queryId || '',
+        query: data.query || '',
+        logId: data.logId || '',
+        baseResult: data.baseResult || '',
+        prismResult: data.prismResult || '',
+        recordId: data.recordId || null, // Bitable record_id
+        swapped: Math.random() < 0.5,
+        annotation: null,
+        uncertain: false,
+        uncertainReason: '',
+        invalid: false,
+        invalidReason: '',
+        synced: false,       // Whether current annotation has been synced
+        lastSyncTime: null
+    };
+}
+
+// ======================== BITABLE API ========================
+function parseBitableUrl(url) {
+    try {
+        const u = new URL(url);
+        const pathParts = u.pathname.split('/').filter(Boolean);
+        let appToken = '';
+        // Handle /base/{appToken} or /wiki/{token} etc.
+        const baseIdx = pathParts.indexOf('base');
+        if (baseIdx >= 0 && pathParts[baseIdx + 1]) {
+            appToken = pathParts[baseIdx + 1];
+        }
+        // Also handle /wiki/ paths that might embed a bitable
+        if (!appToken) {
+            const wikiIdx = pathParts.indexOf('wiki');
+            if (wikiIdx >= 0 && pathParts[wikiIdx + 1]) {
+                appToken = pathParts[wikiIdx + 1];
+            }
+        }
+
+        const tableId = u.searchParams.get('table') || '';
+        const viewId = u.searchParams.get('view') || '';
+        return { appToken, tableId, viewId };
+    } catch {
+        return null;
+    }
+}
+
+async function btRequest(method, path, body = null) {
+    const url = `${btState.apiBase}/open-apis${path}`;
+    const opts = {
+        method,
+        headers: {
+            'Authorization': `Bearer ${btState.token}`,
+            'Content-Type': 'application/json; charset=utf-8'
+        }
+    };
+    if (body) opts.body = JSON.stringify(body);
+    const resp = await fetch(url, opts);
+    const data = await resp.json();
+    if (data.code !== 0) throw new Error(data.msg || `API Error ${data.code}`);
+    return data.data;
+}
+
+async function fetchFields() {
+    const data = await btRequest('GET', `/bitable/v1/apps/${btState.appToken}/tables/${btState.tableId}/fields?page_size=100`);
+    return data.items || [];
+}
+
+async function fetchAllRecords() {
+    let allRecords = [];
+    let pageToken = '';
+    let hasMore = true;
+    while (hasMore) {
+        const params = new URLSearchParams({ page_size: '500' });
+        if (pageToken) params.set('page_token', pageToken);
+        const data = await btRequest('GET', `/bitable/v1/apps/${btState.appToken}/tables/${btState.tableId}/records?${params}`);
+        allRecords = allRecords.concat(data.items || []);
+        hasMore = data.has_more || false;
+        pageToken = data.page_token || '';
+    }
+    return allRecords;
+}
+
+async function updateRecord(recordId, fields) {
+    return btRequest('PUT', `/bitable/v1/apps/${btState.appToken}/tables/${btState.tableId}/records/${recordId}`, { fields });
+}
+
+async function batchUpdateRecords(records) {
+    // Feishu batch update supports max 500 records per request
+    const batchSize = 500;
+    for (let i = 0; i < records.length; i += batchSize) {
+        const batch = records.slice(i, i + batchSize);
+        await btRequest('POST', `/bitable/v1/apps/${btState.appToken}/tables/${btState.tableId}/records/batch_update`, { records: batch });
+    }
+}
+
+// ======================== BITABLE CONNECTION ========================
+async function connectBitable() {
+    const url = document.getElementById('bitableUrl').value.trim();
+    const token = document.getElementById('bitableToken').value.trim();
+    const apiBase = document.getElementById('apiDomain').value;
+    const statusEl = document.getElementById('connectionStatus');
+    const btn = document.getElementById('btnConnect');
+
+    if (!url) return showToast('请输入多维表格 URL', 'error');
+    if (!token) return showToast('请输入 Token', 'error');
+
+    const parsed = parseBitableUrl(url);
+    if (!parsed || !parsed.appToken) return showToast('无法解析 URL，请检查格式', 'error');
+    if (!parsed.tableId) return showToast('URL 缺少 table 参数，请从多维表格中复制完整链接', 'error');
+
+    btState.appToken = parsed.appToken;
+    btState.tableId = parsed.tableId;
+    btState.token = token;
+    btState.apiBase = apiBase;
+
+    btn.disabled = true;
+    btn.classList.add('loading');
+    btn.textContent = '';
+    statusEl.className = 'connection-status';
+    statusEl.style.display = 'none';
+
+    try {
+        const fields = await fetchFields();
+        btState.fields = fields;
+        btState.connected = true;
+
+        statusEl.className = 'connection-status success';
+        statusEl.textContent = `✅ 连接成功！获取到 ${fields.length} 个字段`;
+
+        buildFieldMapping(fields);
+        document.getElementById('fieldMappingSection').style.display = 'block';
+    } catch (err) {
+        statusEl.className = 'connection-status error';
+        let errMsg = err.message;
+        if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
+            errMsg = 'CORS 请求被阻止。建议: ①使用浏览器 CORS 扩展 ②或通过本地代理转发请求';
+        }
+        statusEl.textContent = `❌ 连接失败: ${errMsg}`;
+        btState.connected = false;
+    } finally {
+        btn.disabled = false;
+        btn.classList.remove('loading');
+        btn.textContent = '连接并获取字段';
+    }
+}
+
+function buildFieldMapping(fields) {
+    const fieldNames = fields.map(f => f.field_name);
+
+    // --- Read mapping ---
+    const readGrid = document.getElementById('readMappingGrid');
+    readGrid.innerHTML = '';
+    for (const rf of READ_FIELDS) {
+        const guessed = guessFieldMatch(rf.key, fieldNames);
+        readGrid.innerHTML += `
+            <div class="mapping-item">
+                <span class="label">${rf.label} ${rf.required ? '*' : ''}</span>
+                <select id="readMap_${rf.key}" onchange="updateReadMapping()">
+                    <option value="">-- 不映射 --</option>
+                    ${fieldNames.map(fn => `<option value="${esc(fn)}" ${fn === guessed ? 'selected' : ''}>${esc(fn)}</option>`).join('')}
+                </select>
+            </div>
+        `;
+    }
+    updateReadMapping();
+
+    // --- Write mapping ---
+    const writeGrid = document.getElementById('writeMappingGrid');
+    writeGrid.innerHTML = '';
+    for (const wf of WRITE_FIELDS) {
+        const guessed = guessFieldMatch(wf.key, fieldNames, wf.defaultName);
+        writeGrid.innerHTML += `
+            <div class="mapping-item">
+                <span class="label">${wf.label}</span>
+                <select id="writeMap_${wf.key}" onchange="updateWriteMapping()">
+                    <option value="">-- 不回写 --</option>
+                    ${fieldNames.map(fn => `<option value="${esc(fn)}" ${fn === guessed ? 'selected' : ''}>${esc(fn)}</option>`).join('')}
+                </select>
+            </div>
+        `;
+    }
+    updateWriteMapping();
+}
+
+function guessFieldMatch(key, fieldNames, defaultName) {
+    // Try exact match with aliases or default name
+    const aliases = COLUMN_ALIASES[key] || [defaultName || key];
+    for (const a of aliases) {
+        if (!a) continue;
+        const match = fieldNames.find(fn => fn === a || fn.toLowerCase() === a.toLowerCase());
+        if (match) return match;
+    }
+    // Fuzzy match
+    if (defaultName) {
+        const match = fieldNames.find(fn => fn.includes(defaultName) || defaultName.includes(fn));
+        if (match) return match;
+    }
+    return '';
+}
+
+function updateReadMapping() {
+    READ_FIELDS.forEach(rf => {
+        const sel = document.getElementById('readMap_' + rf.key);
+        if (sel) btState.readMapping[rf.key] = sel.value;
+    });
+}
+
+function updateWriteMapping() {
+    WRITE_FIELDS.forEach(wf => {
+        const sel = document.getElementById('writeMap_' + wf.key);
+        if (sel) btState.writeMapping[wf.key] = sel.value;
+    });
+}
+
+async function loadBitableData() {
+    // Validate required read mappings
+    const missing = READ_FIELDS.filter(rf => rf.required && !btState.readMapping[rf.key]);
+    if (missing.length) {
+        return showToast('请映射必需字段: ' + missing.map(f => f.label).join(', '), 'error');
+    }
+
+    const btn = document.getElementById('btnLoadData');
+    btn.disabled = true;
+    btn.classList.add('loading');
+    btn.textContent = '';
+
+    try {
+        const records = await fetchAllRecords();
+        if (!records.length) return showToast('多维表中没有数据', 'error');
+
+        allCases = records.map((rec, idx) => {
+            const fields = rec.fields;
+            const getVal = (key) => {
+                const fieldName = btState.readMapping[key];
+                if (!fieldName || !fields[fieldName]) return '';
+                const v = fields[fieldName];
+                if (Array.isArray(v)) return v.map(item => typeof item === 'object' ? (item.text || JSON.stringify(item)) : String(item)).join('');
+                if (typeof v === 'object' && v.text) return v.text;
+                return String(v);
+            };
+
+            return createCase(idx, {
+                queryId: getVal('queryId'),
+                query: getVal('query'),
+                logId: getVal('logId'),
+                baseResult: getVal('baseResult'),
+                prismResult: getVal('prismResult'),
+                recordId: rec.record_id
+            });
+        });
+
+        dataSource = 'bitable';
+        enterAnnotationMode();
+        showToast(`成功从多维表加载 ${allCases.length} 条数据`, 'success');
+    } catch (err) {
+        showToast('加载数据失败: ' + err.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.classList.remove('loading');
+        btn.textContent = '加载数据并开始标注';
+    }
+}
+
+// ======================== ENTER ANNOTATION MODE ========================
+function enterAnnotationMode() {
+    document.getElementById('sourceSection').style.display = 'none';
+    document.getElementById('mainContent').style.display = 'block';
+    document.getElementById('statsBar').style.display = 'flex';
+
+    // Show/hide bitable-specific controls
+    const isBitable = dataSource === 'bitable' && btState.connected;
+    document.getElementById('syncStatusItem').style.display = isBitable ? 'inline-flex' : 'none';
+    document.getElementById('btnSyncAll').style.display = isBitable ? 'inline-flex' : 'none';
+    document.getElementById('autoSyncLabel').style.display = isBitable ? 'flex' : 'none';
+
+    if (isBitable) {
+        document.getElementById('syncDot').className = 'sync-dot on';
+        document.getElementById('syncIndicator').className = 'sync-indicator connected';
+        document.getElementById('syncStatusText').textContent = '已连接多维表';
+    }
+
+    currentFilter = 'all';
+    currentIndex = 0;
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.toggle('active', b.dataset.filter === 'all'));
+    renderCurrent();
+    updateStats();
+}
+
+// ======================== SYNC TO BITABLE ========================
+function buildWriteBackFields(c) {
+    const fields = {};
+    const wm = btState.writeMapping;
+
+    const aLabel = c.swapped ? 'PrismResult' : 'BaseResult';
+    const bLabel = c.swapped ? 'BaseResult' : 'PrismResult';
+
+    let baseVsPrism = '';
+    if (c.annotation && !c.uncertain && !c.invalid) {
+        let winner = '';
+        if (c.annotation === 'good') winner = aLabel;
+        else if (c.annotation === 'bad') winner = bLabel;
+        else winner = 'Same';
+        if (winner === 'BaseResult') baseVsPrism = 'Base更好';
+        else if (winner === 'PrismResult') baseVsPrism = 'Prism更好';
+        else baseVsPrism = '一样好';
+    }
+
+    let status = '未标注';
+    if (c.invalid) status = '不合适';
+    else if (c.uncertain) status = '不易判断';
+    else if (c.annotation) status = '已标注';
+
+    let blindChoice = '';
+    if (c.annotation === 'good') blindChoice = 'A更好';
+    else if (c.annotation === 'bad') blindChoice = 'B更好';
+    else if (c.annotation === 'same') blindChoice = '一样好';
+
+    if (wm.conclusion) fields[wm.conclusion] = baseVsPrism;
+    if (wm.status) fields[wm.status] = status;
+    if (wm.blindChoice) fields[wm.blindChoice] = blindChoice;
+    if (wm.uncertainFlag) fields[wm.uncertainFlag] = c.uncertain ? '是' : '否';
+    if (wm.uncertainReason) fields[wm.uncertainReason] = c.uncertainReason || '';
+    if (wm.invalidFlag) fields[wm.invalidFlag] = c.invalid ? '是' : '否';
+    if (wm.invalidReason) fields[wm.invalidReason] = c.invalidReason || '';
+
+    return fields;
+}
+
+async function syncSingleRecord(c) {
+    if (!btState.connected || !c.recordId) return;
+    const hasWriteField = Object.values(btState.writeMapping).some(v => v);
+    if (!hasWriteField) return;
+
+    try {
+        const fields = buildWriteBackFields(c);
+        await updateRecord(c.recordId, fields);
+        c.synced = true;
+        c.lastSyncTime = new Date();
+        btState.syncQueue.delete(c.idx);
+    } catch (err) {
+        c.synced = false;
+        console.error('Sync failed for record', c.recordId, err);
+        throw err;
+    }
+}
+
+async function autoSyncIfEnabled(c) {
+    if (dataSource !== 'bitable' || !btState.connected) return;
+    if (!document.getElementById('autoSyncCheckbox').checked) {
+        c.synced = false;
+        btState.syncQueue.add(c.idx);
+        return;
+    }
+    try {
+        await syncSingleRecord(c);
+    } catch (err) {
+        showToast('自动同步失败: ' + err.message, 'error');
+        btState.syncQueue.add(c.idx);
+    }
+    renderCurrent(); // Refresh sync badge
+}
+
+async function syncAllToBitable() {
+    if (!btState.connected) return showToast('未连接多维表', 'error');
+
+    const hasWriteField = Object.values(btState.writeMapping).some(v => v);
+    if (!hasWriteField) return showToast('未配置回写字段映射', 'error');
+
+    const toSync = allCases.filter(c => c.recordId && (c.annotation || c.uncertain || c.invalid) && !c.synced);
+    if (!toSync.length) return showToast('没有需要同步的数据');
+
+    const btn = document.getElementById('btnSyncAll');
+    btn.disabled = true;
+    btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="spin"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" /></svg> 同步中... (0/${toSync.length})`;
+
+    let success = 0, failed = 0;
+    // Batch update in groups of 500
+    const batches = [];
+    for (let i = 0; i < toSync.length; i += 500) {
+        batches.push(toSync.slice(i, i + 500));
+    }
+
+    for (const batch of batches) {
+        try {
+            const records = batch.map(c => ({
+                record_id: c.recordId,
+                fields: buildWriteBackFields(c)
+            }));
+            await batchUpdateRecords(records);
+            batch.forEach(c => { c.synced = true; c.lastSyncTime = new Date(); btState.syncQueue.delete(c.idx); });
+            success += batch.length;
+        } catch (err) {
+            // Fallback: try one by one
+            for (const c of batch) {
+                try {
+                    await syncSingleRecord(c);
+                    success++;
+                } catch {
+                    failed++;
+                }
+            }
+        }
+        btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" /></svg> 同步中... (${success}/${toSync.length})`;
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" /></svg> 同步到多维表`;
+
+    if (failed) showToast(`同步完成: ${success} 成功, ${failed} 失败`, 'error');
+    else showToast(`全部 ${success} 条记录同步成功！`, 'success');
+    renderCurrent();
+}
+
+// ======================== FILTER & NAV ========================
+function getFiltered() {
+    if (currentFilter === 'all') return allCases;
+    if (currentFilter === 'pending') return allCases.filter(c => !c.annotation && !c.uncertain && !c.invalid);
+    if (currentFilter === 'done') return allCases.filter(c => c.annotation && !c.uncertain && !c.invalid);
+    if (currentFilter === 'uncertain') return allCases.filter(c => c.uncertain);
+    if (currentFilter === 'invalid') return allCases.filter(c => c.invalid);
+    return allCases;
+}
+
+document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentFilter = btn.dataset.filter;
+        currentIndex = 0;
+        renderCurrent();
+    });
+});
+
+document.getElementById('prevBtn').addEventListener('click', () => { if (currentIndex > 0) { currentIndex--; renderCurrent(); } });
+document.getElementById('nextBtn').addEventListener('click', () => { const f = getFiltered(); if (currentIndex < f.length - 1) { currentIndex++; renderCurrent(); } });
+document.getElementById('jumpInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+        const val = parseInt(e.target.value), filtered = getFiltered();
+        if (val >= 1 && val <= filtered.length) { currentIndex = val - 1; renderCurrent(); }
+        else showToast('请输入 1 ~ ' + filtered.length);
+    }
+});
+
+// ======================== RENDER ========================
+function renderCurrent() {
+    const filtered = getFiltered();
+    const container = document.getElementById('caseContainer');
+    const empty = document.getElementById('emptyState');
+    document.getElementById('filteredTotal').textContent = filtered.length;
+
+    if (!filtered.length) {
+        container.innerHTML = '';
+        empty.style.display = 'block';
+        document.getElementById('jumpInput').value = '0';
+        document.getElementById('prevBtn').disabled = true;
+        document.getElementById('nextBtn').disabled = true;
+        return;
+    }
+    empty.style.display = 'none';
+    if (currentIndex >= filtered.length) currentIndex = filtered.length - 1;
+
+    document.getElementById('jumpInput').value = currentIndex + 1;
+    document.getElementById('prevBtn').disabled = currentIndex === 0;
+    document.getElementById('nextBtn').disabled = currentIndex >= filtered.length - 1;
+
+    const c = filtered[currentIndex];
+    const resultA = c.swapped ? c.prismResult : c.baseResult;
+    const resultB = c.swapped ? c.baseResult : c.prismResult;
+
+    let statusBadge;
+    if (c.invalid) statusBadge = '<span class="badge badge-invalid">不合适</span>';
+    else if (c.uncertain) statusBadge = '<span class="badge badge-uncertain">不易判断</span>';
+    else if (c.annotation) statusBadge = '<span class="badge badge-done">已标注</span>';
+    else statusBadge = '<span class="badge badge-pending">待标注</span>';
+
+    let syncBadge = '';
+    if (dataSource === 'bitable' && btState.connected && c.recordId) {
+        if (c.synced) {
+            syncBadge = '<span class="badge badge-synced" title="已同步">✓ 已同步</span>';
+        } else if (c.annotation || c.uncertain || c.invalid) {
+            syncBadge = '<span class="badge badge-sync-pending" title="待同步">⏳ 待同步</span>';
+        }
+    }
+
+    const gsbSel = v => c.annotation === v && !c.uncertain && !c.invalid ? 'selected' : '';
+
+    container.innerHTML = `
+        <div class="case-card">
+            <div class="case-header">
+                <div class="case-meta">
+                    <div class="case-id">QueryID: <strong>${esc(c.queryId)}</strong> &nbsp;|&nbsp; LogID: <span title="${esc(c.logId)}">${esc(c.logId.length > 40 ? c.logId.slice(0,20)+'...'+c.logId.slice(-16) : c.logId)}</span> &nbsp;|&nbsp; 序号: ${c.idx+1}</div>
+                    <div class="case-query">${esc(c.query)}</div>
+                </div>
+                <div class="badge-group">
+                    ${syncBadge}
+                    ${statusBadge}
+                </div>
+            </div>
+            <div class="results-grid">
+                <div class="result-panel">
+                    <span class="result-label label-a">回答 A</span>
+                    <div class="md-content markdown-body">${renderMd(resultA)}</div>
+                </div>
+                <div class="result-panel">
+                    <span class="result-label label-b">回答 B</span>
+                    <div class="md-content markdown-body">${renderMd(resultB)}</div>
+                </div>
+            </div>
+            <div class="annotation-bar">
+                <div class="gsb-group">
+                    <button class="gsb-btn good ${gsbSel('good')}" onclick="annotate('good')" title="快捷键 1">👍 A 更好 <span class="key-hint">[1]</span></button>
+                    <button class="gsb-btn same ${gsbSel('same')}" onclick="annotate('same')" title="快捷键 2">🤝 一样好 <span class="key-hint">[2]</span></button>
+                    <button class="gsb-btn bad ${gsbSel('bad')}" onclick="annotate('bad')" title="快捷键 3">👎 B 更好 <span class="key-hint">[3]</span></button>
+                </div>
+                <div class="divider"></div>
+                <button class="extra-btn uncertain-btn ${c.uncertain ? 'selected' : ''}" onclick="toggleUncertain()" title="快捷键 4">🤔 不易判断 <span class="key-hint">[4]</span></button>
+                <button class="extra-btn invalid-btn ${c.invalid ? 'selected' : ''}" onclick="toggleInvalid()" title="快捷键 5">🚫 不合适 <span class="key-hint">[5]</span></button>
+            </div>
+            <div class="reason-box uncertain-reason ${c.uncertain ? 'show' : ''}" id="uncertainReasonBox">
+                <label>不易判断原因</label>
+                <textarea placeholder="请输入不易判断的原因..." oninput="saveUncertainReason(this.value)">${esc(c.uncertainReason)}</textarea>
+            </div>
+            <div class="reason-box invalid-reason ${c.invalid ? 'show' : ''}" id="invalidReasonBox">
+                <label>不合适原因</label>
+                <textarea placeholder="请输入该 Case 不合适的原因..." oninput="saveInvalidReason(this.value)">${esc(c.invalidReason)}</textarea>
+            </div>
+        </div>
+    `;
+}
+
+// ======================== ANNOTATION ========================
+function annotate(val) {
+    const filtered = getFiltered();
+    if (!filtered.length) return;
+    const c = filtered[currentIndex];
+    if (c.annotation === val) { c.annotation = null; c.synced = false; }
+    else { c.annotation = val; c.uncertain = false; c.uncertainReason = ''; c.invalid = false; c.invalidReason = ''; c.synced = false; }
+    renderCurrent(); updateStats();
+    autoSyncIfEnabled(c);
+    if (c.annotation) setTimeout(() => { const f = getFiltered(); if (currentIndex < f.length - 1) { currentIndex++; renderCurrent(); } }, 300);
+}
+
+function toggleUncertain() {
+    const filtered = getFiltered();
+    if (!filtered.length) return;
+    const c = filtered[currentIndex];
+    c.uncertain = !c.uncertain;
+    if (c.uncertain) { c.annotation = null; c.invalid = false; c.invalidReason = ''; }
+    else { c.uncertainReason = ''; }
+    c.synced = false;
+    renderCurrent(); updateStats();
+    autoSyncIfEnabled(c);
+}
+
+function toggleInvalid() {
+    const filtered = getFiltered();
+    if (!filtered.length) return;
+    const c = filtered[currentIndex];
+    c.invalid = !c.invalid;
+    if (c.invalid) { c.annotation = null; c.uncertain = false; c.uncertainReason = ''; }
+    else { c.invalidReason = ''; }
+    c.synced = false;
+    renderCurrent(); updateStats();
+    autoSyncIfEnabled(c);
+}
+
+function saveUncertainReason(v) {
+    const f = getFiltered();
+    if (f.length) { f[currentIndex].uncertainReason = v; f[currentIndex].synced = false; }
+}
+function saveInvalidReason(v) {
+    const f = getFiltered();
+    if (f.length) { f[currentIndex].invalidReason = v; f[currentIndex].synced = false; }
+}
+
+// Debounced sync for reason text changes
+let reasonSyncTimer = null;
+document.addEventListener('input', e => {
+    if (e.target.closest('.reason-box')) {
+        clearTimeout(reasonSyncTimer);
+        reasonSyncTimer = setTimeout(() => {
+            const filtered = getFiltered();
+            if (filtered.length && dataSource === 'bitable' && btState.connected) {
+                autoSyncIfEnabled(filtered[currentIndex]);
+            }
+        }, 1500); // 1.5s debounce for text input
+    }
+});
+
+// ======================== STATS ========================
+function updateStats() {
+    const total = allCases.length;
+    const done = allCases.filter(c => c.annotation && !c.uncertain && !c.invalid).length;
+    const uncertain = allCases.filter(c => c.uncertain).length;
+    const invalid = allCases.filter(c => c.invalid).length;
+    document.getElementById('totalCount').textContent = total;
+    document.getElementById('doneCount').textContent = done;
+    document.getElementById('uncertainCount').textContent = uncertain;
+    document.getElementById('invalidCount').textContent = invalid;
+    const pct = total ? Math.round((done + uncertain + invalid) / total * 100) : 0;
+    document.getElementById('progressFill').style.width = pct + '%';
+    document.getElementById('progressPct').textContent = pct + '%';
+}
+
+// ======================== EXPORT ========================
+function exportResults() {
+    if (!allCases.length) return showToast('暂无数据可导出');
+
+    const rows = allCases.map(c => {
+        const aLabel = c.swapped ? 'PrismResult' : 'BaseResult';
+        const bLabel = c.swapped ? 'BaseResult' : 'PrismResult';
+        let winner = '';
+        if (c.annotation === 'good') winner = aLabel;
+        else if (c.annotation === 'bad') winner = bLabel;
+        else if (c.annotation === 'same') winner = 'Same';
+
+        let baseVsPrism = '';
+        if (c.annotation) {
+            if (winner === 'BaseResult') baseVsPrism = 'Base 更好';
+            else if (winner === 'PrismResult') baseVsPrism = 'Prism 更好';
+            else baseVsPrism = '一样好';
+        }
+
+        let status = '未标注';
+        if (c.invalid) status = '不合适';
+        else if (c.uncertain) status = '不易判断';
+        else if (c.annotation) status = '已标注';
+
+        return {
+            'QueryID': c.queryId, 'Query': c.query, 'LogID': c.logId,
+            'BaseResult': c.baseResult, 'PrismResult': c.prismResult,
+            '盲评时A对应': aLabel, '盲评时B对应': bLabel,
+            '盲评选择（A/B维度）': c.annotation === 'good' ? 'A更好' : c.annotation === 'bad' ? 'B更好' : c.annotation === 'same' ? '一样好' : '',
+            'Base vs Prism 结论': baseVsPrism,
+            '是否不易判断': c.uncertain ? '是' : '否', '不易判断原因': c.uncertainReason,
+            '是否不合适': c.invalid ? '是' : '否', '不合适原因': c.invalidReason,
+            '标注状态': status
+        };
+    });
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws['!cols'] = Object.keys(rows[0]).map(k => ({ wch: Math.max(k.length * 2, 16) }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '盲评结果');
+
+    const total = allCases.length;
+    const done = allCases.filter(c => c.annotation && !c.uncertain && !c.invalid).length;
+    const uncertain = allCases.filter(c => c.uncertain).length;
+    const invalid = allCases.filter(c => c.invalid).length;
+    const baseWin = allCases.filter(c => { if (!c.annotation || c.uncertain || c.invalid) return false; return (c.annotation==='good'&&!c.swapped)||(c.annotation==='bad'&&c.swapped); }).length;
+    const prismWin = allCases.filter(c => { if (!c.annotation || c.uncertain || c.invalid) return false; return (c.annotation==='good'&&c.swapped)||(c.annotation==='bad'&&!c.swapped); }).length;
+    const sameCount = allCases.filter(c => c.annotation==='same'&&!c.uncertain&&!c.invalid).length;
+
+    const summary = [
+        { '指标': '总用例数', '数值': total }, { '指标': '已标注数', '数值': done },
+        { '指标': '不易判断数', '数值': uncertain }, { '指标': '不合适数', '数值': invalid },
+        { '指标': '未标注数', '数值': total - done - uncertain - invalid },
+        { '指标': '', '数值': '' },
+        { '指标': 'Base 更好', '数值': baseWin }, { '指标': 'Prism 更好', '数值': prismWin },
+        { '指标': '一样好', '数值': sameCount }, { '指标': '', '数值': '' },
+        { '指标': 'Base 胜率（已标注中）', '数值': done ? (baseWin/done*100).toFixed(1)+'%' : '-' },
+        { '指标': 'Prism 胜率（已标注中）', '数值': done ? (prismWin/done*100).toFixed(1)+'%' : '-' },
+        { '指标': '持平率（已标注中）', '数值': done ? (sameCount/done*100).toFixed(1)+'%' : '-' },
+    ];
+    const ws2 = XLSX.utils.json_to_sheet(summary);
+    ws2['!cols'] = [{ wch: 24 }, { wch: 14 }];
+    XLSX.utils.book_append_sheet(wb, ws2, '统计摘要');
+
+    const ts = new Date().toISOString().slice(0,16).replace(/[-:T]/g,'');
+    XLSX.writeFile(wb, `盲评结果_${ts}.xlsx`);
+    showToast('导出成功！', 'success');
+}
+
+// ======================== KEYBOARD ========================
+document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+    if (document.getElementById('mainContent').style.display === 'none') return;
+    switch (e.key) {
+        case '1': annotate('good'); break;
+        case '2': annotate('same'); break;
+        case '3': annotate('bad'); break;
+        case '4': toggleUncertain(); break;
+        case '5': toggleInvalid(); break;
+        case 'ArrowLeft': document.getElementById('prevBtn').click(); break;
+        case 'ArrowRight': document.getElementById('nextBtn').click(); break;
+    }
+});
+
+// ======================== UTILITIES ========================
+function renderMd(text) {
+    if (!text || !text.trim()) return '<p style="color:var(--text-secondary);font-style:italic;">（无内容）</p>';
+    try { return marked.parse(text); } catch { return '<pre>' + esc(text) + '</pre>'; }
+}
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function showToast(msg, type) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast show' + (type ? ' ' + type : '');
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => t.className = 'toast', 3500);
+}
+
+function confirmReset() { document.getElementById('resetModal').classList.add('show'); }
+function closeModal() { document.getElementById('resetModal').classList.remove('show'); }
+function doReset() {
+    closeModal();
+    allCases = [];
+    dataSource = 'file';
+    btState.connected = false;
+    btState.fields = [];
+    btState.syncQueue.clear();
+    document.getElementById('mainContent').style.display = 'none';
+    document.getElementById('statsBar').style.display = 'none';
+    document.getElementById('sourceSection').style.display = 'block';
+    document.getElementById('fieldMappingSection').style.display = 'none';
+    document.getElementById('connectionStatus').className = 'connection-status';
+    document.getElementById('connectionStatus').style.display = 'none';
+    fileInput.value = '';
+}
+</script>
+</body>
 </html>
